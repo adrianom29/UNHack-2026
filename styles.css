@@ -1,0 +1,132 @@
+:root {
+  font-family: system-ui, "Microsoft YaHei", sans-serif;
+  color: #17352d;
+  background: #f3f6f1;
+}
+body {
+  max-width: 1080px;
+  margin: auto;
+  padding: 28px;
+}
+h1 {
+  font-size: 40px;
+  margin: 12px 0;
+}
+p {
+  line-height: 1.7;
+}
+.tag {
+  color: #47725f;
+}
+main {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 24px;
+}
+section,
+form {
+  background: white;
+  padding: 24px;
+  border-radius: 18px;
+}
+label {
+  display: block;
+  margin: 15px 0;
+}
+input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px;
+  font: inherit;
+  border: 1px solid #9ab3a6;
+  border-radius: 6px;
+}
+button {
+  padding: 12px 20px;
+  border: 0;
+  border-radius: 7px;
+  background: #176c4e;
+  color: white;
+  font: inherit;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.6;
+}
+.hero {
+  font-size: 42px;
+  margin: 8px 0;
+  color: #176c4e;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+td,
+th {
+  text-align: right;
+  padding: 12px 6px;
+  border-bottom: 1px solid #dfe7df;
+}
+td:first-child,
+th:first-child {
+  text-align: left;
+}
+svg {
+  width: 100%;
+  height: auto;
+}
+#error {
+  color: #a52929;
+}
+footer {
+  font-size: 14px;
+}
+a {
+  color: #176c4e;
+}
+@media (max-width: 760px) {
+  body {
+    padding: 14px;
+  }
+  main {
+    grid-template-columns: 1fr;
+  }
+  section,
+  form {
+    padding: 16px;
+  }
+  h1 {
+    font-size: 32px;
+  }
+  td,
+  th {
+    padding: 10px 3px;
+    font-size: 14px;
+  }
+}
+
+.record-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 20px;
+}
+select {
+  width: 100%;
+  padding: 10px;
+  font: inherit;
+  border: 1px solid #9ab3a6;
+  border-radius: 6px;
+}
+#records-body td {
+  overflow-wrap: anywhere;
+}
+#record-message {
+  color: #70401b;
+}
+@media (max-width: 600px) {
+  .record-grid {
+    grid-template-columns: 1fr;
+  }
+}

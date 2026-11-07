@@ -12,7 +12,7 @@ From the repository root:
 python smartprep.py --serve
 ```
 
-Open **http://127.0.0.1:8765/**. Keep the terminal running. Press Ctrl+C to stop. On Windows, use `py` instead of `python` if needed. To use another port, add `--port 8766` and open that port. Do not open `demo.html` directly: it needs the Python service.
+Open **http://127.0.0.1:8765/**. Keep the terminal running. Press Ctrl+C to stop. On Windows, use `py` instead of `python` if needed. To use another port, add `--port 8766` and open that port. Do not open `index.html` directly: it needs the Python service.
 
 The server listens on the local computer only. A GitHub repository or GitHub Pages URL does not run this Python application. Every teammate runs their own local copy and database.
 
@@ -62,7 +62,7 @@ Tests cover global integer optima, service constraints, boundary inputs, indepen
 
 - `smartprep.py`: optimizer, CLI, and local HTTP server.
 - `records.py`: SQLite records, regular menu, and sales statistics.
-- `demo.html`, `records.js`: interactive merchant interface.
+- `index.html`, `styles.css`, `app.js`, `records.js`: interactive merchant interface.
 - `test_*.py`, `test_demo.js`: validation.
 
 This upload is the currently runnable demo. Weather/calendar integrations, recipes, shopping lists, expiry-aware inventory, and adaptive forecasting are not included in this version.

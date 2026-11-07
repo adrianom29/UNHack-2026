@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en-CA">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  /><title>SmartPrep · Campus Meal Planning</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <header>
+    <span class="tag">UNHACK / SMALL FOOD BUSINESSES</span>
+    <h1>SmartPrep</h1>
+    <p>Prepare smarter. Waste less. Record your day, then plan tomorrow.</p>
+  </header>
+  <section style="margin-bottom: 24px">
+    <h2>Daily business records</h2>
+    <p>
+      No financial report needed. Record one row per item per day. Your records
+      are saved on this computer and remain after restarting the app.
+    </p>
+    <details id="menu-details" open>
+      <summary>Manage regular items</summary>
+      <p>
+        Set up your regular menu once. These items appear on every new day's
+        entry sheet, even before their first sale.
+      </p>
+      <form id="menu-form" style="padding: 0">
+        <label
+          >New regular item<input
+            id="menu-name"
+            maxlength="80"
+            placeholder="e.g. Chicken sandwich"
+            required /></label
+        ><button type="submit">Add to regular menu</button>
+      </form>
+      <div id="menu-list"></div>
+      <p id="menu-message" role="status" aria-live="polite"></p>
+      <p>
+        Hide an item when you stop selling it; restore it whenever needed.
+        Historical records are kept. Items already saved for the selected date
+        still appear on that day's sheet.
+      </p>
+    </details>
+    <form id="quick-form" style="padding: 0">
+      <label>Business date<input id="quick-day" type="date" required /></label>
+      <p>
+        Your regular menu appears automatically. Enter prepared and sold for all
+        products on this page, then save once. Leave both numbers blank to skip
+        an item. Existing records for this date are loaded for editing.
+      </p>
+      <div id="quick-rows"></div>
+      <button id="add-quick-item" type="button">+ Add item</button>
+      <button id="save-day" type="submit">Save day</button>
+      <button id="reset-day" type="button">Reload saved day</button>
+      <p id="quick-message" role="status" aria-live="polite"></p>
+    </form>
+    <details id="record-details">
+      <summary>Add notes or edit a single record</summary>
+      <form id="record-form" style="padding: 0">
+        <div class="record-grid">
+          <label>Date<input id="record-day" type="date" required /></label>
+          <label
+            >Item name<input
+              id="record-item"
+              maxlength="80"
+              placeholder="e.g. Chicken sandwich"
+              list="item-names"
+              required /><datalist id="item-names"></datalist
+          ></label>
+          <label
+            >Total prepared (all batches)<input
+              id="record-prepared"
+              type="number"
+              min="0"
+              max="1000000"
+              step="1"
+              required
+          /></label>
+          <label
+            >Total sold<input
+              id="record-sold"
+              type="number"
+              min="0"
+              max="1000000"
+              step="1"
+              required
+          /></label>
+        </div>
+        <label
+          >Notes (optional)<input
+            id="record-notes"
+            maxlength="500"
+            placeholder="e.g. Rainy day, sold out at 2 pm"
+        /></label>
+        <button id="save-record" type="submit">Save daily record</button>
+        <button id="cancel-edit" type="button" hidden>Cancel edit</button>
+        <p id="record-message" role="status" aria-live="polite"></p>
+      </form>
+    </details>
+    <div class="record-grid">
+      <label
+        >View an item<select id="history-item">
+          <option value="">Select an item</option>
+        </select></label
+      >
+      <div style="align-self: end; margin-bottom: 15px">
+        <button id="use-history" disabled>
+          Use these records in the model
+        </button>
+        <button id="export-records" disabled>Export all records (CSV)</button>
+      </div>
+    </div>
+    <p id="history-summary" aria-live="polite">
+      No records yet. Add your first day above.
+    </p>
+    <p>
+      Prepared − sold is recorded as unsold, not confirmed waste. Days when all
+      portions sold may hide unmet demand. Zero-preparation days are excluded
+      from demand estimates.
+    </p>
+    <div style="overflow-x: auto">
+      <table>
+        <thead>
+          <tr>
+            <th>Date / item</th>
+            <th>Prepared</th>
+            <th>Sold</th>
+            <th>Unsold</th>
+            <th>Demand signal</th>
+            <th>Notes</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="records-body"></tbody>
+      </table>
+    </div>
+  </section>
+  <p id="data-source" role="status">
+    Model source: illustrative inputs. Enter your own assumptions or apply saved
+    records above.
+  </p>
+  <main>
+    <form id="inputs">
+      <h2>Costs & demand</h2>
+      <label
+        >Selling price per portion (CAD)<input
+          name="p"
+          type="number"
+          min="0"
+          max="1000000"
+          step="any"
+          value="12"
+          required
+      /></label>
+      <label
+        >Preparation cost per portion (CAD)<input
+          name="c"
+          type="number"
+          min="0"
+          max="1000000"
+          step="any"
+          value="5"
+          required
+      /></label>
+      <label
+        >Demand mean μ (portions, before clipping)<input
+          name="mu"
+          type="number"
+          min="0"
+          max="1000000"
+          step="any"
+          value="80"
+          required
+      /></label>
+      <label
+        >Demand standard deviation σ (before clipping)<input
+          name="sigma"
+          type="number"
+          min="0"
+          max="1000000"
+          step="any"
+          value="15"
+          required
+      /></label>
+      <label
+        >Current preparation quantity (whole portions)<input
+          name="baseline"
+          type="number"
+          min="0"
+          max="1000000"
+          step="1"
+          value="100"
+          required
+      /></label>
+      <label
+        >Stockout risk preference<select
+          name="service_level"
+          id="risk-preference"
+        >
+          <option value="0">Profit first — no stockout limit</option>
+          <option value="0.8">Lower risk — at least 80% of days covered</option>
+          <option value="0.9">
+            More reliable — at least 90% of days covered
+          </option>
+          <option value="0.95">
+            Service first — at least 95% of days covered
+          </option>
+        </select></label
+      >
+      <p>
+        A higher target may require more preparation and increase leftovers.
+        Coverage is a model estimate, not a guarantee or the percentage of
+        customers served.
+      </p>
+      <button type="submit">Calculate optimal quantity</button>
+      <p id="error" role="alert"></p>
+    </form>
+    <section>
+      <div id="results" aria-live="polite">Calculating…</div>
+      <h3>Preparation quantity & expected profit</h3>
+      <svg
+        id="plot"
+        viewBox="0 0 640 260"
+        role="img"
+        aria-label="Expected profit by preparation quantity"
+      ></svg>
+      <p>
+        The curve shows analytical expected profit. Dashed lines mark the
+        recommended and current quantities.
+      </p>
+      <button id="download" disabled>Download results (JSON)</button>
+    </section>
+  </main>
+  <footer>
+    <h3>Model assumptions & interpretation</h3>
+    <p>
+      One item, one day, one preparation decision. D=max(0,X), where X~N(μ,σ²).
+      The inputs μ and σ describe demand before negative values are clipped to
+      zero; they are not the exact moments of demand after clipping. Demand is
+      approximated as continuous, while preparation quantities are nonnegative
+      integers. When σ=0, demand is deterministic. Unsold portions have zero
+      salvage value and count as waste. There are no disposal costs, stockout
+      penalties, capacity constraints, or carryover.
+    </p>
+    <p>
+      Profit=p×min(Q,D)−cQ. Stockout probability=P(D&gt;Q), not the proportion
+      of demand left unmet. Model profit deducts the entered preparation cost
+      but excludes fixed expenses. Maximizing expected profit may increase waste
+      or stockout risk; all three outcomes need not improve together. Default
+      inputs are illustrative. Applying your saved records uses observed sales
+      as an approximate demand estimate. Neither mode demonstrates verified
+      savings.
+    </p>
+  </footer>
+  <script src="/app.js"></script>
+  <script src="/records.js"></script>
+</html>
