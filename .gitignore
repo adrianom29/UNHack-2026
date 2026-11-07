@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.sqlite*
+*.db
+*.db-*
+*.log
+*.zip
+.env
+.env.*
+.venv/
+venv/
+.idea/
+.vscode/
+result.json
+smartprep-result.json
+smartprep-daily-records.csv
+context-cache.json

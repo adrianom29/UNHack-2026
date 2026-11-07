@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en-CA"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SmartPrep · Campus Meal Planning</title>
+<style>
+:root{font-family:system-ui,'Microsoft YaHei',sans-serif;color:#17352d;background:#f3f6f1}body{max-width:1080px;margin:auto;padding:28px}h1{font-size:40px;margin:12px 0}p{line-height:1.7}.tag{color:#47725f}main{display:grid;grid-template-columns:280px 1fr;gap:24px}section,form{background:white;padding:24px;border-radius:18px}label{display:block;margin:15px 0}input{display:block;width:100%;box-sizing:border-box;padding:10px;font:inherit;border:1px solid #9ab3a6;border-radius:6px}button{padding:12px 20px;border:0;border-radius:7px;background:#176c4e;color:white;font:inherit;cursor:pointer}button:disabled{opacity:.6}.hero{font-size:42px;margin:8px 0;color:#176c4e}table{width:100%;border-collapse:collapse}td,th{text-align:right;padding:12px 6px;border-bottom:1px solid #dfe7df}td:first-child,th:first-child{text-align:left}svg{width:100%;height:auto}#error{color:#a52929}footer{font-size:14px}a{color:#176c4e}@media(max-width:760px){body{padding:14px}main{grid-template-columns:1fr}section,form{padding:16px}h1{font-size:32px}td,th{padding:10px 3px;font-size:14px}}
+</style>
+<header><span class="tag">UNHACK / SMALL FOOD BUSINESSES</span><h1>SmartPrep</h1><p>Prepare smarter. Waste less. Record your day, then plan tomorrow.</p></header>
+<section style="margin-bottom:24px">
+<h2>Daily business records</h2><p>No financial report needed. Record one row per item per day. Your records are saved on this computer and remain after restarting the app.</p>
+<details id="menu-details" open><summary>Manage regular items</summary>
+<p>Set up your regular menu once. These items appear on every new day's entry sheet, even before their first sale.</p>
+<form id="menu-form" style="padding:0"><label>New regular item<input id="menu-name" maxlength="80" placeholder="e.g. Chicken sandwich" required></label><button type="submit">Add to regular menu</button></form>
+<div id="menu-list"></div><p id="menu-message" role="status" aria-live="polite"></p>
+<p>Hide an item when you stop selling it; restore it whenever needed. Historical records are kept. Items already saved for the selected date still appear on that day's sheet.</p>
+</details>
+<form id="quick-form" style="padding:0">
+<label>Business date<input id="quick-day" type="date" required></label>
+<p>Your regular menu appears automatically. Enter prepared and sold for all products on this page, then save once. Leave both numbers blank to skip an item. Existing records for this date are loaded for editing.</p>
+<div id="quick-rows"></div>
+<button id="add-quick-item" type="button">+ Add item</button> <button id="save-day" type="submit">Save day</button> <button id="reset-day" type="button">Reload saved day</button>
+<p id="quick-message" role="status" aria-live="polite"></p>
+</form>
+<details id="record-details"><summary>Add notes or edit a single record</summary>
+<form id="record-form" style="padding:0"><div class="record-grid">
+<label>Date<input id="record-day" type="date" required></label>
+<label>Item name<input id="record-item" maxlength="80" placeholder="e.g. Chicken sandwich" list="item-names" required><datalist id="item-names"></datalist></label>
+<label>Total prepared (all batches)<input id="record-prepared" type="number" min="0" max="1000000" step="1" required></label>
+<label>Total sold<input id="record-sold" type="number" min="0" max="1000000" step="1" required></label>
+</div><label>Notes (optional)<input id="record-notes" maxlength="500" placeholder="e.g. Rainy day, sold out at 2 pm"></label>
+<button id="save-record" type="submit">Save daily record</button> <button id="cancel-edit" type="button" hidden>Cancel edit</button>
+<p id="record-message" role="status" aria-live="polite"></p></form></details>
+<div class="record-grid"><label>View an item<select id="history-item"><option value="">Select an item</option></select></label><div style="align-self:end;margin-bottom:15px"><button id="use-history" disabled>Use these records in the model</button> <button id="export-records" disabled>Export all records (CSV)</button></div></div>
+<p id="history-summary" aria-live="polite">No records yet. Add your first day above.</p>
+<p>Prepared − sold is recorded as unsold, not confirmed waste. Days when all portions sold may hide unmet demand. Zero-preparation days are excluded from demand estimates.</p>
+<div style="overflow-x:auto"><table><thead><tr><th>Date / item</th><th>Prepared</th><th>Sold</th><th>Unsold</th><th>Demand signal</th><th>Notes</th><th>Action</th></tr></thead><tbody id="records-body"></tbody></table></div>
+</section>
+<style>.record-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 20px}select{width:100%;padding:10px;font:inherit;border:1px solid #9ab3a6;border-radius:6px}#records-body td{overflow-wrap:anywhere}#record-message{color:#70401b}@media(max-width:600px){.record-grid{grid-template-columns:1fr}} </style>
+<p id="data-source" role="status">Model source: illustrative inputs. Enter your own assumptions or apply saved records above.</p>
+<main><form id="inputs"><h2>Costs & demand</h2>
+<label>Selling price per portion (CAD)<input name="p" type="number" min="0" max="1000000" step="any" value="12" required></label>
+<label>Preparation cost per portion (CAD)<input name="c" type="number" min="0" max="1000000" step="any" value="5" required></label>
+<label>Demand mean μ (portions, before clipping)<input name="mu" type="number" min="0" max="1000000" step="any" value="80" required></label>
+<label>Demand standard deviation σ (before clipping)<input name="sigma" type="number" min="0" max="1000000" step="any" value="15" required></label>
+<label>Current preparation quantity (whole portions)<input name="baseline" type="number" min="0" max="1000000" step="1" value="100" required></label>
+<label>Stockout risk preference<select name="service_level" id="risk-preference">
+<option value="0">Profit first — no stockout limit</option>
+<option value="0.8">Lower risk — at least 80% of days covered</option>
+<option value="0.9">More reliable — at least 90% of days covered</option>
+<option value="0.95">Service first — at least 95% of days covered</option>
+</select></label>
+<p>A higher target may require more preparation and increase leftovers. Coverage is a model estimate, not a guarantee or the percentage of customers served.</p>
+<button type="submit">Calculate optimal quantity</button><p id="error" role="alert"></p></form>
+<section><div id="results" aria-live="polite">Calculating…</div><h3>Preparation quantity & expected profit</h3><svg id="plot" viewBox="0 0 640 260" role="img" aria-label="Expected profit by preparation quantity"></svg><p>The curve shows analytical expected profit. Dashed lines mark the recommended and current quantities.</p><button id="download" disabled>Download results (JSON)</button></section></main>
+<footer><h3>Model assumptions & interpretation</h3><p>One item, one day, one preparation decision. D=max(0,X), where X~N(μ,σ²). The inputs μ and σ describe demand before negative values are clipped to zero; they are not the exact moments of demand after clipping. Demand is approximated as continuous, while preparation quantities are nonnegative integers. When σ=0, demand is deterministic. Unsold portions have zero salvage value and count as waste. There are no disposal costs, stockout penalties, capacity constraints, or carryover.</p><p>Profit=p×min(Q,D)−cQ. Stockout probability=P(D&gt;Q), not the proportion of demand left unmet. Model profit deducts the entered preparation cost but excludes fixed expenses. Maximizing expected profit may increase waste or stockout risk; all three outcomes need not improve together. Default inputs are illustrative. Applying your saved records uses observed sales as an approximate demand estimate. Neither mode demonstrates verified savings.</p></footer>
+<script>
+const form=document.getElementById('inputs'),results=document.getElementById('results'),error=document.getElementById('error'),plot=document.getElementById('plot'),download=document.getElementById('download');let latest,historySource=null;
+const fmt=n=>n.toLocaleString('en-CA',{minimumFractionDigits:2,maximumFractionDigits:2});
+async function calculate(e){if(e)e.preventDefault();error.textContent='';download.disabled=true;try{const inputs=Object.fromEntries([...new FormData(form)].map(([k,v])=>[k,Number(v)]));const response=await fetch('/calculate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(inputs)});const r=await response.json();if(!response.ok)throw Error(r.error);latest=r;if(historySource)latest.history_source=historySource;
+const a=r.baseline,b=r.optimal;
+results.innerHTML=`<span>${r.inputs.service_level?'Best expected profit within your service target':'Profit-maximizing preparation quantity'}</span><div class="hero">${b.quantity} portions</div><p>${b.quantity-a.quantity>=0?'+':''}${b.quantity-a.quantity} portions compared with your current plan.</p><table><thead><tr><th>Daily metric</th><th>Current</th><th>Recommended</th></tr></thead><tbody>${[['Quantity (portions)',a.quantity,b.quantity],['Expected profit (CAD)',fmt(a.profit),fmt(b.profit)],['Expected waste (portions)',fmt(a.waste),fmt(b.waste)],['Stockout probability',fmt(a.stockout_probability*100)+'%',fmt(b.stockout_probability*100)+'%'],['Expected unmet demand (portions)',fmt(a.unmet_demand),fmt(b.unmet_demand)]].map(row=>'<tr>'+row.map(x=>`<td>${x}</td>`).join('')+'</tr>').join('')}</tbody></table><p>Recommended − current: profit ${fmt(r.delta.profit)} CAD; waste ${fmt(r.delta.waste)} portions; stockout probability ${fmt(100*r.delta.stockout_probability)} percentage points.</p><p>Expected demand after clipping: ${fmt(r.effective_mean)} portions.</p>`;
+if(r.inputs.service_level){results.innerHTML+=`<p>Target: at least ${fmt(100*r.inputs.service_level)}% of days covered. Estimated coverage: ${fmt(100*(1-b.stockout_probability))}%.</p><p>Compared with profit-first (${r.profit_only.quantity} portions): ${b.quantity-r.profit_only.quantity} extra portions, CAD ${fmt(r.profit_only.profit-b.profit)} less expected profit, and ${fmt(b.waste-r.profit_only.waste)} more expected leftover portions.</p>`;}
+const points=r.curve,xmax=Math.max(...points.map(d=>d.quantity)),lo=Math.min(0,...points.map(d=>d.profit)),hi=Math.max(1,...points.map(d=>d.profit)),x=q=>65+q/xmax*550,y=v=>210-(v-lo)/(hi-lo)*175;
+plot.innerHTML=`<line x1="65" y1="210" x2="615" y2="210" stroke="#9ab3a6"/><text x="10" y="24" font-size="12">CAD</text><text x="0" y="45" font-size="12">${fmt(hi)}</text><text x="0" y="210" font-size="12">${fmt(lo)}</text><polyline fill="none" stroke="#176c4e" stroke-width="3" points="${points.map(d=>x(d.quantity)+','+y(d.profit)).join(' ')}"/>${[[b,'#176c4e','Recommended'],[a,'#a76c22','Current']].map(([d,col,label],i)=>`<line x1="${x(d.quantity)}" x2="${x(d.quantity)}" y1="35" y2="210" stroke="${col}" stroke-dasharray="4 4"/><text x="${i?420:65}" y="${i?18:18}" fill="${col}" font-size="12">${label} ${d.quantity} portions</text>`).join('')}<text x="65" y="235" font-size="12">0</text><text x="530" y="235" font-size="12">${xmax} portions</text>`;download.disabled=false;
+}catch(exc){error.textContent=exc.message;results.textContent='Unable to calculate. Please check your inputs.';plot.innerHTML='';latest=null;}}
+form.addEventListener('submit',calculate);download.addEventListener('click',()=>{if(!latest)return;const url=URL.createObjectURL(new Blob([JSON.stringify(latest,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='smartprep-result.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});calculate();
+</script><script src="/records.js"></script></html>
