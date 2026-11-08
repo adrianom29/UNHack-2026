@@ -1,82 +1,139 @@
-const form = document.getElementById("inputs"),
-  results = document.getElementById("results"),
+const results = document.getElementById("results"),
   error = document.getElementById("error"),
-  plot = document.getElementById("plot"),
-  download = document.getElementById("download");
-let latest,
-  historySource = null;
+  download = document.getElementById("download"),
+  riskPreference = document.getElementById("risk-preference");
+let latest = null;
 const fmt = (n) =>
   n.toLocaleString("en-CA", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
-async function calculate(e) {
-  if (e) e.preventDefault();
+const whole = (n) => Math.round(n).toLocaleString("en-CA");
+const escapeHTML = (s) =>
+  String(s).replace(
+    /[&<>"']/g,
+    (ch) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        ch
+      ],
+  );
+// Every SmartPrep route answers with JSON; anything else means the page is
+// being served by something other than an up-to-date SmartPrep server.
+async function readJSON(response) {
+  try {
+    return await response.json();
+  } catch {
+    throw Error(
+      response.status === 404 || response.status === 405
+        ? "The server doesn't recognize this request. It may be an older copy still running, or Live Server. Stop it (Ctrl+C), run `py smartprep.py --serve` again, and open http://127.0.0.1:8765/."
+        : "The SmartPrep server did not respond. Run `py smartprep.py --serve` and open http://127.0.0.1:8765/.",
+    );
+  }
+}
+
+// A percentage card. `pct` is null when there is nothing to compare with.
+function card(label, pct, better, worse, detail) {
+  let value, note;
+  if (pct === null) {
+    value = "—";
+    note = detail;
+  } else if (Math.abs(pct) < 0.05) {
+    value = "No change";
+    note = detail;
+  } else {
+    value = `${Math.abs(pct).toFixed(1)}%`;
+    note = `${pct > 0 ? better : worse} · ${detail}`;
+  }
+  return `<div class="card"><span>${label}</span><strong>${value}</strong><small>${note}</small></div>`;
+}
+
+function planRow(i) {
+  const notes = [];
+  if (i.provisional)
+    notes.push(`provisional: ${i.days_used} of ${latest.min_days} days recorded`);
+  if (i.all_sold_out)
+    notes.push(
+      "sold out every day, so real demand is unknown; try making a little more",
+    );
+  else if (i.sellouts_adjusted)
+    notes.push(
+      `adjusted for ${i.sellouts_adjusted} sold-out day${i.sellouts_adjusted === 1 ? "" : "s"}`,
+    );
+  const note = notes.length
+    ? `<br /><small class="note">${notes.join(" · ")}</small>`
+    : "";
+  return `<tr><td>${escapeHTML(i.item)}${note}</td><td><strong>${i.recommended_quantity}</strong></td><td>${whole(i.predicted_demand)}</td><td>${i.last_quantity}</td></tr>`;
+}
+
+async function showPlan() {
   error.textContent = "";
   download.disabled = true;
   try {
-    const inputs = Object.fromEntries(
-      [...new FormData(form)].map(([k, v]) => [k, Number(v)]),
+    const response = await fetch(
+      "/plan?service_level=" + encodeURIComponent(riskPreference.value),
     );
-    const response = await fetch("/calculate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(inputs),
-    });
-    const r = await response.json();
+    const r = await readJSON(response);
     if (!response.ok) throw Error(r.error);
     latest = r;
-    if (historySource) latest.history_source = historySource;
-    const a = r.baseline,
-      b = r.optimal;
-    results.innerHTML = `<span>${r.inputs.service_level ? "Best expected profit within your service target" : "Profit-maximizing preparation quantity"}</span><div class="hero">${b.quantity} portions</div><p>${b.quantity - a.quantity >= 0 ? "+" : ""}${b.quantity - a.quantity} portions compared with your current plan.</p><table><thead><tr><th>Daily metric</th><th>Current</th><th>Recommended</th></tr></thead><tbody>${[
-      ["Quantity (portions)", a.quantity, b.quantity],
-      ["Expected profit (CAD)", fmt(a.profit), fmt(b.profit)],
-      ["Expected waste (portions)", fmt(a.waste), fmt(b.waste)],
-      [
-        "Stockout probability",
-        fmt(a.stockout_probability * 100) + "%",
-        fmt(b.stockout_probability * 100) + "%",
-      ],
-      [
-        "Expected unmet demand (portions)",
-        fmt(a.unmet_demand),
-        fmt(b.unmet_demand),
-      ],
-    ]
-      .map((row) => "<tr>" + row.map((x) => `<td>${x}</td>`).join("") + "</tr>")
-      .join(
-        "",
-      )}</tbody></table><p>Recommended − current: profit ${fmt(r.delta.profit)} CAD; waste ${fmt(r.delta.waste)} portions; stockout probability ${fmt(100 * r.delta.stockout_probability)} percentage points.</p><p>Expected demand after clipping: ${fmt(r.effective_mean)} portions.</p>`;
-    if (r.inputs.service_level) {
-      results.innerHTML += `<p>Target: at least ${fmt(100 * r.inputs.service_level)}% of days covered. Estimated coverage: ${fmt(100 * (1 - b.stockout_probability))}%.</p><p>Compared with profit-first (${r.profit_only.quantity} portions): ${b.quantity - r.profit_only.quantity} extra portions, CAD ${fmt(r.profit_only.profit - b.profit)} less expected profit, and ${fmt(b.waste - r.profit_only.waste)} more expected leftover portions.</p>`;
+    const t = r.totals,
+      checked = t.source === "backtest";
+    // Backtest totals cover the checked days; estimates are per day.
+    const period = checked ? `over the last ${t.checked_days} days` : "per day";
+    let html = "";
+    if (r.items.length) {
+      const target = new Date(r.items[0].target_day + "T00:00");
+      html +=
+        `<p>Plan for <strong>${target.toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" })}</strong></p>` +
+        `<div class="cards">` +
+        card(
+          "Predicted waste reduction",
+          t.waste_reduction_pct,
+          "less waste",
+          "more waste",
+          t.previous_waste > 0
+            ? `${whole(t.predicted_waste)} vs. ${whole(t.previous_waste)} items wasted ${period}`
+            : "no waste recorded so far",
+        ) +
+        card(
+          "Predicted profit increase",
+          t.profit_increase_pct,
+          "more profit",
+          "less profit",
+          t.previous_profit > 0
+            ? `CAD ${fmt(t.predicted_profit)} vs. CAD ${fmt(t.previous_profit)} ${period}`
+            : `CAD ${fmt(t.predicted_profit)} expected ${period}`,
+        ) +
+        `<div class="card"><span>Forecast accuracy</span><strong>${t.forecast_error_pct === null ? "Not checked yet" : `±${Math.round(t.forecast_error_pct)}%`}</strong><small>${t.forecast_error_pct === null ? `needs items with more than ${r.min_days} days of records` : "typical miss per item per day, on days that did not sell out"}</small></div>` +
+        `</div>` +
+        `<p class="${checked ? "" : "note"}">${
+          checked
+            ? `Checked: SmartPrep replayed your last ${t.checked_days} days for ${t.checked_items} item(s), planning each day only from the days before it, and compared that with what you actually made and sold.`
+            : `Estimate only: these numbers will be checked against your real results once items have more than ${r.min_days} days of records.`
+        }</p>` +
+        `<div style="overflow-x: auto"><table><thead><tr><th>Item</th><th>Make tomorrow</th><th>Expected to sell</th><th>Made last time</th></tr></thead><tbody>` +
+        r.items.map(planRow).join("") +
+        `</tbody></table></div>`;
     }
-    const points = r.curve,
-      xmax = Math.max(...points.map((d) => d.quantity)),
-      lo = Math.min(0, ...points.map((d) => d.profit)),
-      hi = Math.max(1, ...points.map((d) => d.profit)),
-      x = (q) => 65 + (q / xmax) * 550,
-      y = (v) => 210 - ((v - lo) / (hi - lo)) * 175;
-    plot.innerHTML = `<line x1="65" y1="210" x2="615" y2="210" stroke="#9ab3a6"/><text x="10" y="24" font-size="12">CAD</text><text x="0" y="45" font-size="12">${fmt(hi)}</text><text x="0" y="210" font-size="12">${fmt(lo)}</text><polyline fill="none" stroke="#176c4e" stroke-width="3" points="${points.map((d) => x(d.quantity) + "," + y(d.profit)).join(" ")}"/>${[
-      [b, "#176c4e", "Recommended"],
-      [a, "#a76c22", "Current"],
-    ]
-      .map(
-        ([d, col, label], i) =>
-          `<line x1="${x(d.quantity)}" x2="${x(d.quantity)}" y1="35" y2="210" stroke="${col}" stroke-dasharray="4 4"/><text x="${i ? 420 : 65}" y="${i ? 18 : 18}" fill="${col}" font-size="12">${label} ${d.quantity} portions</text>`,
-      )
-      .join(
-        "",
-      )}<text x="65" y="235" font-size="12">0</text><text x="530" y="235" font-size="12">${xmax} portions</text>`;
-    download.disabled = false;
+    if (r.waiting.length) {
+      html +=
+        `<p class="note">Not planned yet:</p><ul class="note">` +
+        r.waiting
+          .map((w) => `<li>${escapeHTML(w.item)}: ${escapeHTML(w.reason)}</li>`)
+          .join("") +
+        `</ul>`;
+    }
+    results.innerHTML =
+      html ||
+      "Add items to your menu and save at least two days of records to get a plan.";
+    download.disabled = !r.items.length;
   } catch (exc) {
-    error.textContent = exc.message;
-    results.textContent = "Unable to calculate. Please check your inputs.";
-    plot.innerHTML = "";
     latest = null;
+    results.textContent = "No plan available yet.";
+    error.textContent = exc.message;
   }
 }
-form.addEventListener("submit", calculate);
+
+riskPreference.addEventListener("change", showPlan);
 download.addEventListener("click", () => {
   if (!latest) return;
   const url = URL.createObjectURL(
@@ -86,8 +143,7 @@ download.addEventListener("click", () => {
   );
   const a = document.createElement("a");
   a.href = url;
-  a.download = "smartprep-result.json";
+  a.download = "smartprep-plan.json";
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
-calculate();

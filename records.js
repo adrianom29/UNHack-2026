@@ -1,29 +1,27 @@
 const byId = (id) => document.getElementById(id);
 let dailyRows = [],
   regularItems = [],
-  editingId = null,
-  historyStats = null;
-const recordForm = byId("record-form"),
-  itemSelect = byId("history-item");
+  editingId = null;
+const recordForm = byId("record-form");
+// Days the owner has expanded in Past records; kept open across refreshes.
+const openDays = new Set();
 const today = new Date();
 const localDay = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 byId("record-day").value = localDay;
 byId("record-day").max = localDay;
 async function requestJSON(url, options) {
   const r = await fetch(url, options);
-  const data = await r.json();
+  const data = await readJSON(r);
   if (!r.ok) throw Error(data.error || "Unable to save. Please try again.");
   return data;
 }
-function invalidateModel(message) {
-  latest = null;
-  historySource = null;
-  download.disabled = true;
-  results.textContent = message;
-  plot.innerHTML = "";
-  byId("data-source").textContent =
-    "Model source: records changed. Apply records again or calculate using manual inputs.";
-}
+const postJSON = (url, data) =>
+  requestJSON(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+
 function resetRecordForm() {
   editingId = null;
   recordForm.reset();
@@ -42,86 +40,132 @@ function editRow(r) {
     "Editing an existing record. Save changes to update it.";
   byId("record-day").focus();
 }
-async function showHistory() {
-  const item = itemSelect.value;
-  historyStats = null;
-  byId("use-history").disabled = true;
-  const body = byId("records-body");
-  body.replaceChildren();
-  for (const r of dailyRows.filter((r) => r.item === item)) {
-    const row = document.createElement("tr");
-    for (const value of [
-      r.day + " / " + r.item,
-      r.prepared,
-      r.sold,
-      r.prepared - r.sold,
-      r.prepared === 0
-        ? "No preparation"
-        : r.sold === r.prepared
-          ? "Possible stockout"
-          : "Stock remained",
-      r.notes,
-    ]) {
-      const cell = document.createElement("td");
-      cell.textContent = value;
-      row.append(cell);
-    }
-    const cell = document.createElement("td"),
-      button = document.createElement("button");
-    button.textContent = "Edit";
-    button.type = "button";
-    button.addEventListener("click", () => editRow(r));
-    cell.append(button);
+const actionButton = (text, label, onClick) => {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = text;
+  button.setAttribute("aria-label", label);
+  button.addEventListener("click", () => onClick(button));
+  return button;
+};
+const cellRow = (tag, values) => {
+  const row = document.createElement("tr");
+  for (const value of values) {
+    const cell = document.createElement(tag);
+    cell.textContent = value;
     row.append(cell);
-    body.append(row);
   }
-  if (!item) {
-    byId("history-summary").textContent =
-      "No records yet. Add your first day above.";
-    return;
+  return row;
+};
+const total = (rows, pick) => rows.reduce((sum, r) => sum + pick(r), 0);
+const longDate = (day) =>
+  new Date(day + "T00:00").toLocaleDateString("en-CA", {
+    weekday: "short",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+// One entry per day; expanding a day shows each item recorded on it.
+function showHistory() {
+  const list = byId("history-days");
+  list.replaceChildren();
+  const days = new Map();
+  for (const r of dailyRows) {
+    if (!days.has(r.day)) days.set(r.day, []);
+    days.get(r.day).push(r);
   }
-  try {
-    const s = await requestJSON(
-      "/history-summary?item=" + encodeURIComponent(item),
+  for (const [day, rows] of days) {
+    rows.sort((a, b) => a.item.localeCompare(b.item));
+    const made = total(rows, (r) => r.prepared),
+      sold = total(rows, (r) => r.sold);
+    const details = document.createElement("details");
+    details.className = "day";
+    details.open = openDays.has(day);
+    details.addEventListener("toggle", () =>
+      details.open ? openDays.add(day) : openDays.delete(day),
     );
-    if (itemSelect.value !== item) return;
-    historyStats = s;
-    byId("history-summary").textContent =
-      `${s.count} usable days; ${s.excluded_zero_prepared} zero-preparation days excluded. ` +
-      (s.count ? `Sales average: ${fmt(s.mu)} portions. ` : "") +
-      (s.sigma !== null
-        ? `Sample standard deviation: ${fmt(s.sigma)}. `
-        : "At least two usable days are needed to estimate variation. ") +
-      `${s.possible_stockouts} possible stockout days. ` +
-      (s.possible_stockouts
-        ? "Sales may underestimate demand; this estimate does not correct for lost sales. "
-        : "") +
-      (s.count < 7
-        ? "Very limited history: treat estimates as provisional. "
-        : "") +
-      "All saved dates for this item are included; missing dates are not treated as zero sales.";
-    byId("use-history").disabled = s.count < 2;
+    const summary = document.createElement("summary");
+    const date = document.createElement("strong");
+    date.textContent = longDate(day);
+    const stats = document.createElement("span");
+    stats.textContent = `${rows.length} item${rows.length === 1 ? "" : "s"} · made ${made} · sold ${sold} · wasted ${made - sold}`;
+    summary.append(date, stats);
+    details.append(summary);
+
+    const table = document.createElement("table"),
+      head = document.createElement("thead"),
+      body = document.createElement("tbody");
+    head.append(
+      cellRow("th", ["Item", "Made", "Sold", "Waste", "Notes", "Action"]),
+    );
+    for (const r of rows) {
+      const row = cellRow("td", [
+        r.item,
+        r.prepared,
+        r.sold,
+        r.prepared - r.sold,
+        r.notes,
+      ]);
+      const cell = document.createElement("td");
+      cell.className = "actions";
+      cell.append(
+        actionButton("Edit", `Edit ${r.item} on ${r.day}`, () => editRow(r)),
+      );
+      row.append(cell);
+      body.append(row);
+    }
+    table.append(head, body);
+    const scroll = document.createElement("div");
+    scroll.style.overflowX = "auto";
+    scroll.append(table);
+    const remove = actionButton(
+      "Delete day",
+      `Delete all records for ${day}`,
+      (button) => deleteDay(day, rows.length, button),
+    );
+    remove.className = "danger";
+    details.append(scroll, remove);
+    list.append(details);
+  }
+  byId("history-summary").textContent = days.size
+    ? `${days.size} day${days.size === 1 ? "" : "s"} recorded. Click a day to see its items.`
+    : "No records yet. Save your first day above.";
+}
+async function deleteDay(day, count, button) {
+  if (
+    !confirm(
+      `Delete the record for ${longDate(day)} (${count} item${count === 1 ? "" : "s"})? This cannot be undone.`,
+    )
+  )
+    return;
+  button.disabled = true;
+  try {
+    await postJSON("/records/delete-day", { day });
+    openDays.delete(day);
+    // Stop editing a record that was just deleted with its day.
+    if (dailyRows.some((r) => r.id === editingId && r.day === day))
+      resetRecordForm();
+    await loadRecords();
+    byId("history-message").textContent = `Deleted the record for ${longDate(day)}.`;
   } catch (e) {
-    byId("history-summary").textContent = e.message;
+    byId("history-message").textContent = e.message;
+    button.disabled = false;
   }
 }
-async function loadRecords(preferred) {
+async function loadRecords() {
   dailyRows = (await requestJSON("/records")).records;
   regularItems = (await requestJSON("/items")).items;
   renderMenu();
   const names = [...new Set(dailyRows.map((r) => r.item))].sort();
-  const previous = preferred || itemSelect.value;
-  itemSelect.replaceChildren();
   byId("item-names").replaceChildren();
-  for (const name of names) itemSelect.add(new Option(name, name));
   for (const name of [
     ...new Set([...names, ...regularItems.map((r) => r.item)]),
   ].sort())
     byId("item-names").append(new Option(name, name));
-  if (names.includes(previous)) itemSelect.value = previous;
   byId("export-records").disabled = !dailyRows.length;
   if (!quickDirty) renderQuickDay();
-  await showHistory();
+  showHistory();
+  showPlan();
 }
 recordForm.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -136,16 +180,9 @@ recordForm.addEventListener("submit", async (e) => {
   };
   if (editingId !== null) data.id = editingId;
   try {
-    await requestJSON("/records", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
+    await postJSON("/records", data);
     resetRecordForm();
-    invalidateModel(
-      "Records updated. Apply saved records to refresh your recommendation.",
-    );
-    await loadRecords(data.item);
+    await loadRecords();
     byId("record-message").textContent = "Saved on this computer.";
   } catch (e) {
     byId("record-message").textContent = e.message;
@@ -157,63 +194,28 @@ byId("cancel-edit").addEventListener("click", () => {
   resetRecordForm();
   byId("record-message").textContent = "Edit cancelled.";
 });
-itemSelect.addEventListener("change", showHistory);
-byId("use-history").addEventListener("click", async () => {
-  if (!historyStats || historyStats.count < 2) return;
-  const s = historyStats;
-  form.elements.mu.value = s.mu;
-  form.elements.sigma.value = s.sigma;
-  form.elements.baseline.value = s.baseline;
-  byId("data-source").textContent =
-    `Model source: recorded sales for ${s.item}, ${s.first_day} to ${s.last_day} (${s.count} days). Sales moments are used as approximate normal parameters, not a fitted demand forecast. ${s.possible_stockouts} possible stockout days; unmet demand is not estimated. Baseline is the latest usable day's preparation. Price and cost remain your manual estimates.`;
-  historySource = {
-    ...s,
-    method: "sales moments as approximate latent normal parameters",
-  };
-  await calculate();
-});
-form.addEventListener("input", (e) => {
-  if (["mu", "sigma", "baseline"].includes(e.target.name)) {
-    historySource = null;
-    byId("data-source").textContent =
-      "Model source: manually edited demand inputs. Calculate to update the recommendation.";
-  }
-  latest = null;
-  download.disabled = true;
-  results.textContent = "Inputs changed. Calculate to refresh results.";
-  plot.innerHTML = "";
-});
 byId("export-records").addEventListener("click", () => {
   const quote = (value) =>
     '"' +
-    String(value)
+    String(value ?? "")
       .replace(/^[=+@-]/, "'$&")
       .replaceAll('"', '""') +
     '"';
   const csv = [
-    [
-      "date",
-      "item",
-      "prepared",
-      "sold",
-      "unsold",
-      "possible_stockout",
-      "notes",
-    ],
+    ["date", "item", "made", "sold", "waste", "notes"],
     ...dailyRows.map((r) => [
       r.day,
       r.item,
       r.prepared,
       r.sold,
       r.prepared - r.sold,
-      r.prepared > 0 && r.sold === r.prepared,
       r.notes,
     ]),
   ]
     .map((row) => row.map(quote).join(","))
     .join("\r\n");
   const url = URL.createObjectURL(
-      new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }),
+      new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }),
     ),
     a = document.createElement("a");
   a.href = url;
@@ -225,9 +227,13 @@ let quickDirty = false,
   quickDay = localDay;
 byId("quick-day").value = localDay;
 byId("quick-day").max = localDay;
+const QUICK_FIELDS = [
+  ["prepared", "Made", "1"],
+  ["sold", "Sold", "1"],
+];
 function addQuickRow(name = "", saved) {
   const row = document.createElement("div");
-  row.className = "record-grid";
+  row.className = "entry-row";
   const itemLabel = document.createElement("label");
   itemLabel.textContent = "Item";
   const item = document.createElement("input");
@@ -238,23 +244,20 @@ function addQuickRow(name = "", saved) {
   item.readOnly = !!name;
   itemLabel.append(item);
   row.append(itemLabel);
-  const counts = document.createElement("div");
-  counts.className = "record-grid";
-  for (const field of ["prepared", "sold"]) {
+  for (const [field, text, step] of QUICK_FIELDS) {
     const label = document.createElement("label");
-    label.textContent = field === "prepared" ? "Prepared" : "Sold";
+    label.textContent = text;
     const input = document.createElement("input");
     input.type = "number";
     input.min = "0";
     input.max = "1000000";
-    input.step = "1";
+    input.step = step;
     input.dataset.field = field;
-    input.setAttribute("aria-label", `${field} for ${name || "new item"}`);
+    input.setAttribute("aria-label", `${text} for ${name || "new item"}`);
     input.value = saved ? saved[field] : "";
     label.append(input);
-    counts.append(label);
+    row.append(label);
   }
-  row.append(counts);
   row.addEventListener("input", () => {
     quickDirty = true;
     byId("quick-message").textContent = "Unsaved changes.";
@@ -281,56 +284,156 @@ function renderMenu() {
   const list = byId("menu-list");
   list.replaceChildren();
   for (const entry of regularItems) {
-    const row = document.createElement("p");
-    const label = document.createElement("span");
-    label.textContent =
-      entry.item + (entry.active ? " — On daily sheet " : " — Hidden ");
-    row.append(label);
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = entry.active ? "Hide" : "Restore";
-    button.setAttribute(
+    const row = document.createElement("tr");
+    const name = document.createElement("td");
+    name.textContent = entry.item;
+    row.append(name);
+    for (const field of ["price", "cost"]) {
+      const cell = document.createElement("td"),
+        input = document.createElement("input");
+      input.type = "number";
+      input.min = "0";
+      input.max = "1000000";
+      input.step = "0.01";
+      input.placeholder = "Not set";
+      input.className = "menu-amount";
+      input.value = entry[field] ?? "";
+      input.setAttribute(
+        "aria-label",
+        `${field === "price" ? "Price" : "Cost to make"} of ${entry.item} (CAD)`,
+      );
+      // "change" fires once the owner leaves the box or presses Enter.
+      input.addEventListener("change", () => saveAmount(entry, field, input));
+      cell.append(input);
+      row.append(cell);
+    }
+    const status = document.createElement("td");
+    status.textContent = entry.active ? "On daily sheet" : "Hidden";
+    row.append(status);
+    const actions = document.createElement("td");
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.textContent = entry.active ? "Hide" : "Restore";
+    toggle.setAttribute(
       "aria-label",
       `${entry.active ? "Hide" : "Restore"} ${entry.item}`,
     );
-    button.addEventListener("click", () =>
-      changeMenu(entry.item, !entry.active, button),
+    toggle.addEventListener("click", () =>
+      saveMenuItem(
+        { item: entry.item, active: !entry.active },
+        toggle,
+        entry.active
+          ? `${entry.item} is hidden from new daily sheets. Past records are kept.`
+          : `${entry.item} is back on your daily sheet.`,
+      ),
     );
-    row.append(button);
+    actions.className = "actions";
+    actions.append(
+      toggle,
+      " ",
+      actionButton("Delete", `Delete ${entry.item}`, (button) =>
+        deleteMenuItem(entry, button),
+      ),
+    );
+    row.append(actions);
     list.append(row);
   }
   if (!regularItems.length) {
-    list.textContent =
-      "No regular items yet. Add your products above to get started.";
+    const row = document.createElement("tr"),
+      cell = document.createElement("td");
+    cell.colSpan = 5;
+    cell.textContent = "No menu items yet. Add your first item below.";
+    row.append(cell);
+    list.append(row);
   }
 }
-async function changeMenu(item, active, button) {
+// Saves one price or cost straight from the menu table. The table is not
+// redrawn, so moving from one box to the next keeps the cursor in place.
+async function saveAmount(entry, field, input) {
+  const label = field === "price" ? "price" : "cost";
+  const previous = entry[field] ?? "";
+  if (input.value === "" || !input.checkValidity()) {
+    input.value = previous;
+    byId("menu-message").textContent =
+      `Enter a ${label} of 0 or more for ${entry.item}.`;
+    return;
+  }
+  input.disabled = true;
+  try {
+    const { items } = await postJSON("/items", {
+      item: entry.item,
+      active: !!entry.active,
+      [field]: Number(input.value),
+    });
+    regularItems = items;
+    Object.assign(entry, items.find((i) => i.item === entry.item));
+    input.value = entry[field];
+    byId("menu-message").textContent = `Saved ${entry.item} ${label}.`;
+    showPlan();
+  } catch (e) {
+    input.value = previous;
+    byId("menu-message").textContent = e.message;
+  } finally {
+    input.disabled = false;
+  }
+}
+async function deleteMenuItem(entry, button) {
   if (quickDirty) {
     byId("menu-message").textContent =
       "Save your daily entries or reload the saved day before changing the menu.";
     return;
   }
-  if (button) button.disabled = true;
+  const count = dailyRows.filter((r) => r.item === entry.item).length;
+  const warning = count
+    ? `Delete ${entry.item} and its ${count} past record(s)? This cannot be undone. To keep the records, use Hide instead.`
+    : `Delete ${entry.item} from the menu?`;
+  if (!confirm(warning)) return;
+  button.disabled = true;
   try {
-    await requestJSON("/items", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ item, active }),
-    });
+    await postJSON("/items/delete", { item: entry.item });
+    if (byId("record-item").value.trim() === entry.item) resetRecordForm();
     await loadRecords();
-    byId("menu-message").textContent = active
-      ? `${item.trim()} is on your regular menu. It will appear on future dates.`
-      : `${item} is hidden from new daily sheets. Historical records are kept.`;
-    byId("menu-name").value = "";
+    byId("menu-message").textContent = count
+      ? `Deleted ${entry.item} and ${count} past record(s).`
+      : `Deleted ${entry.item}.`;
   } catch (e) {
     byId("menu-message").textContent = e.message;
+    button.disabled = false;
+  }
+}
+async function saveMenuItem(data, button, message) {
+  if (quickDirty) {
+    byId("menu-message").textContent =
+      "Save your daily entries or reload the saved day before changing the menu.";
+    return false;
+  }
+  if (button) button.disabled = true;
+  try {
+    await postJSON("/items", data);
+    await loadRecords();
+    byId("menu-message").textContent = message;
+    return true;
+  } catch (e) {
+    byId("menu-message").textContent = e.message;
+    return false;
   } finally {
     if (button) button.disabled = false;
   }
 }
-byId("menu-form").addEventListener("submit", (e) => {
+byId("menu-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  changeMenu(byId("menu-name").value, true, e.submitter);
+  const item = byId("menu-name").value.trim();
+  const saved = await saveMenuItem(
+    {
+      item,
+      price: Number(byId("menu-price").value),
+      cost: Number(byId("menu-cost").value),
+      active: true,
+    },
+    e.submitter,
+    `${item} added. It will appear on your daily sheet.`,
+  );
+  if (saved) byId("menu-form").reset();
 });
 byId("add-quick-item").addEventListener("click", () => {
   addQuickRow();
@@ -360,33 +463,25 @@ byId("quick-form").addEventListener("submit", async (e) => {
     for (const row of byId("quick-rows").children) {
       const value = (field) =>
         row.querySelector(`[data-field="${field}"]`).value;
-      const prepared = value("prepared"),
-        sold = value("sold");
-      if (prepared === "" && sold === "") continue;
-      if (prepared === "" || sold === "")
+      const name = value("item").trim();
+      if (value("prepared") === "" && value("sold") === "") continue;
+      if (QUICK_FIELDS.some(([field]) => value(field) === ""))
         throw Error(
-          "Enter both prepared and sold for each item, or leave both blank.",
+          `Enter both made and sold for ${name || "each item"}, or leave both blank to skip it.`,
         );
       rows.push({
-        item: value("item").trim(),
-        prepared: Number(prepared),
-        sold: Number(sold),
+        item: name,
+        ...Object.fromEntries(
+          QUICK_FIELDS.map(([field]) => [field, Number(value(field))]),
+        ),
       });
     }
-    if (!rows.length)
-      throw Error("Enter prepared and sold for at least one item.");
-    const saved = await requestJSON("/records/batch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ day: quickDay, rows }),
-    });
+    if (!rows.length) throw Error("Enter made and sold for at least one item.");
+    const saved = await postJSON("/records/batch", { day: quickDay, rows });
     quickDirty = false;
     await loadRecords();
-    invalidateModel(
-      "Daily records saved. Apply records to update your recommendation.",
-    );
     byId("quick-message").textContent =
-      `Saved ${saved.saved} item(s) for ${quickDay}. Existing entries updated; notes preserved.`;
+      `Saved ${saved.saved} item(s) for ${quickDay}.`;
   } catch (e) {
     byId("quick-message").textContent = e.message;
   } finally {
@@ -394,6 +489,6 @@ byId("quick-form").addEventListener("submit", async (e) => {
   }
 });
 loadRecords().catch((e) => {
-  byId("record-message").textContent =
+  byId("quick-message").textContent =
     "Could not load saved records: " + e.message;
 });

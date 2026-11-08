@@ -125,8 +125,100 @@ select {
 #record-message {
   color: #70401b;
 }
+.entry-row,
+.menu-grid {
+  display: grid;
+  grid-template-columns: 2fr repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+}
+details.day {
+  border-bottom: 1px solid #dfe7df;
+}
+details.day summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  align-items: baseline;
+  padding: 12px 4px;
+  cursor: pointer;
+}
+details.day summary::-webkit-details-marker {
+  display: none;
+}
+details.day summary::before {
+  content: "▸";
+  color: #176c4e;
+}
+details.day[open] summary::before {
+  content: "▾";
+}
+details.day summary span {
+  color: #47725f;
+}
+details.day[open] summary {
+  background: #eef4ef;
+}
+details.day table {
+  margin-bottom: 12px;
+}
+details.day > button.danger {
+  margin: 0 0 16px;
+}
+.actions {
+  white-space: nowrap;
+}
+.actions button {
+  padding: 6px 12px;
+}
+button.danger,
+.actions button[aria-label^="Delete"] {
+  background: #a52929;
+}
+.menu-amount {
+  max-width: 120px;
+  margin-left: auto;
+  padding: 6px 8px;
+  text-align: right;
+}
+.entry-row label {
+  margin: 8px 0;
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+.card {
+  background: #eef4ef;
+  border-radius: 12px;
+  padding: 16px;
+}
+.card span,
+.card small {
+  display: block;
+  color: #47725f;
+}
+.card strong {
+  display: block;
+  font-size: 26px;
+  margin: 6px 0;
+  color: #176c4e;
+}
+.note {
+  color: #70401b;
+}
 @media (max-width: 600px) {
-  .record-grid {
+  .record-grid,
+  .cards {
     grid-template-columns: 1fr;
+  }
+  .entry-row,
+  .menu-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .entry-row label:first-child,
+  .menu-grid label:first-child {
+    grid-column: 1 / -1;
   }
 }

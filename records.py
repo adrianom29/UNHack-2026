@@ -1,5 +1,6 @@
 """Persistent daily logs for one local business; each item is analyzed separately."""
 
+import math
 import sqlite3
 from datetime import date
 from pathlib import Path
@@ -18,12 +19,29 @@ def connect():
         notes TEXT NOT NULL DEFAULT '', UNIQUE(day,item))""")
     db.execute(
         """CREATE TABLE IF NOT EXISTS regular_items (
-        item TEXT PRIMARY KEY, active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)))"""
+        item TEXT PRIMARY KEY, active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+        price REAL, cost REAL)"""
     )
+    # Older databases were created before menu items had a price and cost.
+    item_columns = {r["name"] for r in db.execute("PRAGMA table_info(regular_items)")}
+    for column in ("price", "cost"):
+        if column not in item_columns:
+            db.execute(f"ALTER TABLE regular_items ADD COLUMN {column} REAL")
     # Seed existing products without reactivating products the owner has hidden.
     db.execute(
         "INSERT OR IGNORE INTO regular_items(item) SELECT DISTINCT item FROM daily_records"
     )
+    # A briefly released version stored price and cost on each daily record.
+    # Carry the latest of those onto menu items that do not have a price yet.
+    record_columns = {r["name"] for r in db.execute("PRAGMA table_info(daily_records)")}
+    if {"price", "cost"} <= record_columns:
+        db.execute("""UPDATE regular_items SET (price, cost) = (
+            SELECT r.price, r.cost FROM daily_records r
+            WHERE r.item = regular_items.item AND r.price IS NOT NULL
+            ORDER BY r.day DESC, r.id DESC LIMIT 1)
+            WHERE price IS NULL AND EXISTS (
+            SELECT 1 FROM daily_records r
+            WHERE r.item = regular_items.item AND r.price IS NOT NULL)""")
     db.commit()
     return db
 
@@ -33,28 +51,99 @@ def list_items():
     try:
         return [
             dict(r)
-            for r in db.execute("SELECT item,active FROM regular_items ORDER BY item")
+            for r in db.execute(
+                "SELECT item,active,price,cost FROM regular_items ORDER BY item"
+            )
         ]
     finally:
         db.close()
 
 
-def save_item(item, active=True):
+def clean_name(item):
     if not isinstance(item, str) or not 1 <= len(item.strip()) <= 80:
         raise ValueError("Enter an item name of 1–80 characters.")
+    return item.strip()
+
+
+def check_amount(value):
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or not 0 <= value <= 1_000_000
+    ):
+        raise ValueError("Price and cost must be amounts between 0 and 1,000,000.")
+
+
+def save_item(item, active=True, price=None, cost=None):
+    """Add or change a menu item. Price and cost left as None are kept."""
+    item = clean_name(item)
     if type(active) is not bool:
         raise ValueError("Active must be true or false.")
+    for value in (price, cost):
+        if value is not None:
+            check_amount(value)
     db = connect()
+
     try:
         with db:
+            exists = db.execute(
+                "SELECT 1 FROM regular_items WHERE item=?", (item,)
+            ).fetchone()
+            if not exists and (price is None or cost is None):
+                raise ValueError("Enter a price and cost for the new item.")
             db.execute(
-                """INSERT INTO regular_items(item,active) VALUES(?,?)
-                ON CONFLICT(item) DO UPDATE SET active=excluded.active""",
-                (item.strip(), int(active)),
+                """INSERT INTO regular_items(item,active,price,cost) VALUES(?,?,?,?)
+                ON CONFLICT(item) DO UPDATE SET active=excluded.active,
+                price=COALESCE(excluded.price,price),
+                cost=COALESCE(excluded.cost,cost)""",
+                (item, int(active), price, cost),
             )
     finally:
         db.close()
     return {"items": list_items()}
+
+
+def get_item(item):
+    db = connect()
+    try:
+        row = db.execute(
+            "SELECT item,active,price,cost FROM regular_items WHERE item=?", (item,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        db.close()
+
+
+def delete_item(item):
+    """Remove an item from the menu together with all of its daily records."""
+    item = clean_name(item)
+    db = connect()
+    try:
+        with db:
+            removed = db.execute(
+                "DELETE FROM daily_records WHERE item=?", (item,)
+            ).rowcount
+            if db.execute("DELETE FROM regular_items WHERE item=?", (item,)).rowcount != 1:
+                raise ValueError("That item is no longer on the menu. Refresh the page.")
+    finally:
+        db.close()
+    return {"items": list_items(), "records": list_records(), "deleted_records": removed}
+
+
+def delete_day(day):
+    """Remove every item's record for one date."""
+    if not isinstance(day, str):
+        raise ValueError("Enter a valid date in YYYY-MM-DD format.")
+    db = connect()
+    try:
+        with db:
+            removed = db.execute("DELETE FROM daily_records WHERE day=?", (day,)).rowcount
+            if not removed:
+                raise ValueError("There are no records for that day. Refresh the records.")
+    finally:
+        db.close()
+    return {"records": list_records(), "deleted_records": removed}
 
 
 def list_records():
@@ -62,7 +151,10 @@ def list_records():
     try:
         return [
             dict(r)
-            for r in db.execute("SELECT * FROM daily_records ORDER BY day DESC,id DESC")
+            for r in db.execute(
+                """SELECT id,day,item,prepared,sold,notes FROM daily_records
+                ORDER BY day DESC,id DESC"""
+            )
         ]
     finally:
         db.close()
@@ -73,9 +165,7 @@ def validate_record(day, item, prepared, sold, notes="", id=None):
         raise ValueError("Enter a valid date in YYYY-MM-DD format.")
     if day > date.today().isoformat():
         raise ValueError("Daily records cannot be dated in the future.")
-    if not isinstance(item, str) or not 1 <= len(item.strip()) <= 80:
-        raise ValueError("Enter an item name of 1–80 characters.")
-    item = item.strip()
+    item = clean_name(item)
     for value in (prepared, sold):
         if type(value) is not int or not 0 <= value <= 1_000_000:
             raise ValueError(
@@ -144,19 +234,40 @@ def save_batch(day, rows):
     return {"records": list_records(), "saved": len(clean)}
 
 
+def item_history(item):
+    """An item's days with something made, oldest first."""
+    return [
+        r
+        for r in reversed(list_records())
+        if r["item"] == item and r["prepared"] > 0
+    ]
+
+
 def summary(item):
     rows = [r for r in list_records() if r["item"] == item]
     # Zero-preparation days cannot reveal demand, even if recorded as zero sales.
     usable = [r for r in rows if r["prepared"] > 0]
     sales = [r["sold"] for r in usable]
+    menu = get_item(item) or {}
+    price, cost = menu.get("price"), menu.get("cost")
     return dict(
         item=item,
         count=len(usable),
         total_records=len(rows),
         excluded_zero_prepared=len(rows) - len(usable),
         possible_stockouts=sum(r["sold"] == r["prepared"] for r in usable),
-        mu=mean(sales) if sales else None,
-        sigma=stdev(sales) if len(sales) >= 2 else None,
+        # Plain sales statistics for display; forecasts use demand.estimate().
+        average_sold=mean(sales) if sales else None,
+        sales_std=stdev(sales) if len(sales) >= 2 else None,
+        price=price,
+        cost=cost,
+        # Actual averages per day, valued at today's menu price and cost.
+        previous_waste=mean(r["prepared"] - r["sold"] for r in usable) if usable else None,
+        previous_profit=(
+            mean(price * r["sold"] - cost * r["prepared"] for r in usable)
+            if usable and price is not None and cost is not None
+            else None
+        ),
         baseline=usable[0]["prepared"] if usable else None,
         first_day=usable[-1]["day"] if usable else None,
         last_day=usable[0]["day"] if usable else None,

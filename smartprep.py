@@ -3,10 +3,12 @@
 import argparse
 import json
 import math
+from datetime import date, timedelta
 from statistics import NormalDist
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
+import demand
 import records
 
 NORMAL = NormalDist()
@@ -56,8 +58,7 @@ def metrics(q, p, c, mu, sigma):
     )
 
 
-def solve(p=12, c=5, mu=80, sigma=15, baseline=100, service_level=0):
-    validate(p, c, mu, sigma, baseline)
+def validate_service_level(service_level):
     if (
         isinstance(service_level, bool)
         or not isinstance(service_level, (int, float))
@@ -67,6 +68,10 @@ def solve(p=12, c=5, mu=80, sigma=15, baseline=100, service_level=0):
         raise ValueError(
             "Service level must be between 0 (profit priority) and less than 1."
         )
+
+
+def best_quantity(p, c, mu, sigma, service_level=0):
+    """Returns (quantity, profit-only quantity, service-level minimum)."""
     if p > 0 and c == 0 and sigma > 0:
         raise ValueError(
             "Zero cost with an unbounded normal demand tail: no finite profit-maximizing quantity exists. Enter a positive cost."
@@ -84,14 +89,20 @@ def solve(p=12, c=5, mu=80, sigma=15, baseline=100, service_level=0):
         )
         # Sorted order makes exact profit ties choose the smaller quantity.
         q = max(candidates, key=lambda n: metrics(n, p, c, mu, sigma)["profit"])
-    profit_only = metrics(q, p, c, mu, sigma)
     minimum = 0
     if service_level > 0:
         minimum = max(
             0,
             math.ceil(mu if sigma == 0 else mu + sigma * NORMAL.inv_cdf(service_level)),
         )
-        q = max(q, minimum)
+    return max(q, minimum), q, minimum
+
+
+def solve(p=12, c=5, mu=80, sigma=15, baseline=100, service_level=0):
+    validate(p, c, mu, sigma, baseline)
+    validate_service_level(service_level)
+    q, profit_q, minimum = best_quantity(p, c, mu, sigma, service_level)
+    profit_only = metrics(profit_q, p, c, mu, sigma)
     current = metrics(int(baseline), p, c, mu, sigma)
     optimal = metrics(q, p, c, mu, sigma)
     upper = max(1, baseline, q, mu + 4 * sigma) * 1.15
@@ -120,6 +131,167 @@ def solve(p=12, c=5, mu=80, sigma=15, baseline=100, service_level=0):
     )
 
 
+BACKTEST_DAYS = 28
+
+
+def backtest(rows, p, c, service_level=0, window=BACKTEST_DAYS):
+    """Replay the last `window` days: plan each one from earlier days only.
+
+    rows are an item's usable records, oldest first. A day is checked only if
+    at least demand.MIN_DAYS earlier days exist. On days that sold out, true
+    demand is unknown; if the plan would have made more, demand is taken as
+    the expected amount above the sell-out point under that day's forecast.
+    (Treating it as exactly what sold made the check far too pessimistic in
+    simulate.py; this version reads slightly optimistic on waste.)
+    """
+    result = dict(
+        days=[],
+        actual_waste=0,
+        plan_waste=0,
+        actual_profit=0.0,
+        plan_profit=0.0,
+        error_sum=0.0,
+        error_sold=0,
+        error_days=0,
+    )
+    if not rows:
+        return result
+    last = date.fromisoformat(rows[-1]["day"])
+    for i, r in enumerate(rows):
+        day = date.fromisoformat(r["day"])
+        if i < demand.MIN_DAYS or (last - day).days >= window:
+            continue
+        est = demand.estimate(rows[:i], day)
+        if est is None:
+            continue
+        q = best_quantity(p, c, est["mu"], est["sigma"], service_level)[0]
+        made, sold = r["prepared"], r["sold"]
+        likely = sold
+        if sold >= made and q > made:
+            # Sold out, so demand was at least `made`; use the expected demand
+            # above that point under the forecast made from earlier days.
+            likely = demand.expected_above(est["mu"], est["sigma"], made)
+        plan_sold = min(q, likely)
+        result["days"].append(r["day"])
+        result["actual_waste"] += made - sold
+        result["plan_waste"] += q - plan_sold
+        result["actual_profit"] += p * sold - c * made
+        result["plan_profit"] += p * plan_sold - c * q
+        if sold < made:  # demand known exactly: score the forecast
+            result["error_sum"] += abs(est["mu"] - sold)
+            result["error_sold"] += sold
+            result["error_days"] += 1
+    return result
+
+
+def forecast(item, service_level=0, target=None):
+    """Plan `target` (default tomorrow) for one item from its saved records."""
+    target = target or date.today() + timedelta(days=1)
+    history = records.summary(item)
+    if history["count"] < 2:
+        raise ValueError(
+            f"Save at least two days with prepared and sold for {item} to get a forecast."
+        )
+    if history["price"] is None:
+        raise ValueError(f"Set a price and cost for {item} under Manage menu.")
+    rows = records.item_history(item)
+    est = demand.estimate(rows, target)
+    if est is None:
+        raise ValueError(
+            f"Save at least two days for {item} within the last {demand.MAX_HISTORY_DAYS} days."
+        )
+    p, c = history["price"], history["cost"]
+    model = solve(p, c, est["mu"], est["sigma"], history["baseline"], service_level)
+    best = model["optimal"]
+    return dict(
+        item=item,
+        target_day=target.isoformat(),
+        predicted_demand=est["mu"],
+        recommended_quantity=best["quantity"],
+        last_quantity=history["baseline"],
+        predicted_waste=best["waste"],
+        predicted_profit=best["profit"],
+        previous_waste=history["previous_waste"],
+        previous_profit=history["previous_profit"],
+        provisional=est["days"] < demand.MIN_DAYS,
+        days_used=est["days"],
+        sellouts_adjusted=est["sellouts"],
+        all_sold_out=est["all_sold_out"],
+        history=history,
+        backtest=backtest(rows, p, c, service_level),
+    )
+
+
+def percent_change(before, after):
+    """Change from before to after as a percentage of before (None if before <= 0)."""
+    return 100 * (after - before) / before if before > 0 else None
+
+
+def plan(service_level=0, target=None):
+    """Tomorrow's plan for every item on the menu, with combined totals."""
+    # Check up front: per-item errors below are reported as "not planned yet".
+    validate_service_level(service_level)
+    ready, waiting = [], []
+    for entry in records.list_items():
+        if not entry["active"]:
+            continue
+        try:
+            ready.append(forecast(entry["item"], service_level, target))
+        except ValueError as exc:
+            waiting.append(dict(item=entry["item"], reason=str(exc)))
+    return dict(
+        items=ready,
+        waiting=waiting,
+        totals=combine(ready),
+        min_days=demand.MIN_DAYS,
+        backtest_days=BACKTEST_DAYS,
+        service_level=service_level,
+    )
+
+
+def combine(ready):
+    """Combined waste and profit change for all planned items.
+
+    Uses the backtest (plans checked against days they did not see) when any
+    item has checked days; otherwise falls back to the model's own estimate.
+    """
+    checked = [r["backtest"] for r in ready if r["backtest"]["days"]]
+    if checked:
+        before_waste = sum(b["actual_waste"] for b in checked)
+        after_waste = sum(b["plan_waste"] for b in checked)
+        before_profit = sum(b["actual_profit"] for b in checked)
+        after_profit = sum(b["plan_profit"] for b in checked)
+        error_sold = sum(b["error_sold"] for b in checked)
+        totals = dict(
+            source="backtest",
+            checked_items=len(checked),
+            checked_days=len({d for b in checked for d in b["days"]}),
+            forecast_error_pct=(
+                100 * sum(b["error_sum"] for b in checked) / error_sold
+                if error_sold > 0
+                else None
+            ),
+        )
+    else:
+        before_waste = sum(r["previous_waste"] for r in ready)
+        after_waste = sum(r["predicted_waste"] for r in ready)
+        before_profit = sum(r["previous_profit"] for r in ready)
+        after_profit = sum(r["predicted_profit"] for r in ready)
+        totals = dict(source="estimate", checked_items=0, checked_days=0,
+                      forecast_error_pct=None)
+    totals.update(
+        previous_waste=before_waste,
+        predicted_waste=after_waste,
+        previous_profit=before_profit,
+        predicted_profit=after_profit,
+        waste_reduction_pct=(
+            -percent_change(before_waste, after_waste) if before_waste > 0 else None
+        ),
+        profit_increase_pct=percent_change(before_profit, after_profit),
+    )
+    return totals
+
+
 class Handler(BaseHTTPRequestHandler):
     def send_json(self, data, status=200):
         self.send_response(status)
@@ -138,6 +310,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/history-summary":
             self.send_json(records.summary(parse_qs(parsed.query).get("item", [""])[0]))
+            return
+        if parsed.path == "/plan":
+            query = parse_qs(parsed.query)
+            try:
+                level = float(query.get("service_level", ["0"])[0])
+                self.send_json(plan(level))
+            except (ValueError, TypeError, OverflowError) as exc:
+                self.send_json({"error": str(exc)}, 400)
             return
         static_files = {
             "/": ("index.html", "text/html; charset=utf-8"),
@@ -158,7 +338,14 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
-        if self.path not in ("/calculate", "/records", "/records/batch", "/items"):
+        if self.path not in (
+            "/calculate",
+            "/records",
+            "/records/batch",
+            "/records/delete-day",
+            "/items",
+            "/items/delete",
+        ):
             self.send_error(404)
             return
         try:
@@ -170,6 +357,10 @@ class Handler(BaseHTTPRequestHandler):
                 result = solve(**args)
             elif self.path == "/items":
                 result = records.save_item(**args)
+            elif self.path == "/items/delete":
+                result = records.delete_item(**args)
+            elif self.path == "/records/delete-day":
+                result = records.delete_day(**args)
             elif self.path == "/records/batch":
                 result = records.save_batch(**args)
             else:
