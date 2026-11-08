@@ -103,7 +103,6 @@ async function showPlan() {
             ? `CAD ${fmt(t.predicted_profit)} vs. CAD ${fmt(t.previous_profit)} ${period}`
             : `CAD ${fmt(t.predicted_profit)} expected ${period}`,
         ) +
-        `<div class="card"><span>Forecast accuracy</span><strong>${t.forecast_error_pct === null ? "Not checked yet" : `±${Math.round(t.forecast_error_pct)}%`}</strong><small>${t.forecast_error_pct === null ? `needs items with more than ${r.min_days} days of records` : "typical miss per item per day, on days that did not sell out"}</small></div>` +
         `</div>` +
         `<p class="${checked ? "" : "note"}">${
           checked

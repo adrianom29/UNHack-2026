@@ -83,7 +83,7 @@ const show = () => vm.runInContext("showPlan()", context);
   assert(html.includes("15.0%") && html.includes("more profit"), "profit %");
   assert(html.includes("Plan for <strong>Sunday, November 8"));
   assert(html.includes("10 vs. 28 items wasted over the last 28 days"));
-  assert(html.includes("±12%"));
+  assert(!html.includes("Forecast accuracy"), "accuracy card removed");
   assert(html.includes("Checked: SmartPrep replayed your last 28 days"));
   assert(html.includes("Soup &lt;hot&gt;"), "item name is escaped");
   assert(html.includes("<strong>83</strong>") && html.includes("<strong>36</strong>"));
@@ -107,7 +107,6 @@ const show = () => vm.runInContext("showPlan()", context);
   assert(elements.results.innerHTML.includes("less profit"));
   assert(elements.results.innerHTML.includes("no waste recorded so far"));
   assert(elements.results.innerHTML.includes("Estimate only"));
-  assert(elements.results.innerHTML.includes("Not checked yet"));
 
   reply = {
     ok: true,
