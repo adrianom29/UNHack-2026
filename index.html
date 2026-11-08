@@ -153,6 +153,16 @@
     <div id="history-days"></div>
     <p id="history-message" role="status" aria-live="polite"></p>
     <button id="export-records" disabled>Export all records (CSV)</button>
+    <button id="import-records" type="button">Import records (CSV)</button>
+    <button id="delete-all-records" class="danger" type="button" disabled>
+      Delete all records
+    </button>
+    <input id="import-file" type="file" accept=".csv,text/csv" hidden />
+    <p class="tag">
+      Import uses the same columns as the export: date (YYYY-MM-DD), item,
+      made, sold and optional notes. A day and item that is already saved is
+      replaced by the file.
+    </p>
   </section>
   <footer>
     <h3>How the forecast works</h3>

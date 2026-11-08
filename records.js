@@ -163,6 +163,7 @@ async function loadRecords() {
   ].sort())
     byId("item-names").append(new Option(name, name));
   byId("export-records").disabled = !dailyRows.length;
+  byId("delete-all-records").disabled = !dailyRows.length;
   if (!quickDirty) renderQuickDay();
   showHistory();
   showPlan();
@@ -222,6 +223,137 @@ byId("export-records").addEventListener("click", () => {
   a.download = "smartprep-daily-records.csv";
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+byId("delete-all-records").addEventListener("click", async (e) => {
+  const button = e.currentTarget,
+    message = byId("history-message");
+  if (quickDirty) {
+    message.textContent =
+      "Save your daily entries or reload the saved day before deleting records.";
+    return;
+  }
+  const days = new Set(dailyRows.map((r) => r.day)).size;
+  if (
+    !confirm(
+      `Delete all ${dailyRows.length} record(s) across ${days} day(s)? Forecasts will have no history until you add records again. Your menu, prices and costs are kept. This cannot be undone. Tip: use "Export all records (CSV)" first to keep a copy.`,
+    )
+  )
+    return;
+  button.disabled = true;
+  try {
+    const result = await postJSON("/records/delete-all", { confirm: true });
+    openDays.clear();
+    if (editingId !== null) resetRecordForm();
+    await loadRecords();
+    message.textContent = `Deleted all ${result.deleted_records} record(s).`;
+  } catch (err) {
+    message.textContent = err.message;
+    button.disabled = !dailyRows.length;
+  }
+});
+// Splits CSV text into rows of cells, honouring quoted cells with commas,
+// doubled quotes and line breaks (the format the export writes).
+function parseCSV(text) {
+  const rows = [];
+  let row = [],
+    cell = "",
+    quoted = false;
+  text = text.replace(/^﻿/, "");
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"' && text[i + 1] === '"') cell += '"', i++;
+      else if (ch === '"') quoted = false;
+      else cell += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ",") row.push(cell), (cell = "");
+    else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      row.push(cell);
+      rows.push(row);
+      (row = []), (cell = "");
+    } else cell += ch;
+  }
+  if (quoted) throw Error("The file has a quote that is never closed.");
+  if (cell !== "" || row.length) row.push(cell), rows.push(row);
+  // Skip blank lines, e.g. the one spreadsheet programs leave at the end.
+  return rows.filter((r) => r.some((c) => c.trim() !== ""));
+}
+// Turns an exported CSV back into records for /records/import.
+function csvToRecords(text) {
+  const [header, ...lines] = parseCSV(text);
+  if (!header) throw Error("The file is empty.");
+  const names = header.map((h) => h.trim().toLowerCase());
+  const column = (name, required = true) => {
+    const at = names.indexOf(name);
+    if (at < 0 && required)
+      throw Error(
+        `The file needs a "${name}" column. Use the same columns as an exported file: date, item, made, sold, notes.`,
+      );
+    return at;
+  };
+  const cols = {
+    day: column("date"),
+    item: column("item"),
+    prepared: column("made"),
+    sold: column("sold"),
+    notes: column("notes", false),
+  };
+  if (!lines.length) throw Error("The file has a header but no records.");
+  // The export puts ' before text starting with = + @ or - so spreadsheet
+  // programs do not run it as a formula; remove it again.
+  const plain = (value) => (value ?? "").replace(/^'(?=[=+@-])/, "");
+  const count = (value, line, label) => {
+    const n = Number(String(value).trim());
+    if (String(value).trim() === "" || !Number.isInteger(n) || n < 0)
+      throw Error(`Line ${line}: ${label} must be a whole number of 0 or more.`);
+    return n;
+  };
+  return lines.map((cells, i) => {
+    const line = i + 2;
+    return {
+      day: (cells[cols.day] ?? "").trim(),
+      item: plain(cells[cols.item]).trim(),
+      prepared: count(cells[cols.prepared], line, "made"),
+      sold: count(cells[cols.sold], line, "sold"),
+      notes: cols.notes < 0 ? "" : plain(cells[cols.notes]),
+    };
+  });
+}
+byId("import-records").addEventListener("click", () => {
+  if (quickDirty) {
+    byId("history-message").textContent =
+      "Save your daily entries or reload the saved day before importing.";
+    return;
+  }
+  byId("import-file").click();
+});
+byId("import-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = ""; // lets the same file be picked again after a fix
+  if (!file) return;
+  const button = byId("import-records"),
+    message = byId("history-message");
+  button.disabled = true;
+  message.textContent = `Importing ${file.name}…`;
+  try {
+    const rows = csvToRecords(await file.text());
+    const result = await postJSON("/records/import", { rows });
+    if (editingId !== null) resetRecordForm();
+    await loadRecords();
+    const parts = [`Imported ${rows.length} record(s) from ${file.name}`];
+    if (result.replaced)
+      parts.push(`${result.replaced} replaced existing day(s) for the same item`);
+    if (result.new_items)
+      parts.push(
+        `${result.new_items} new item(s) added to your menu — set their price and cost in the menu so they can be planned`,
+      );
+    message.textContent = parts.join("; ") + ".";
+  } catch (err) {
+    message.textContent = `Nothing was imported. ${err.message}`;
+  } finally {
+    button.disabled = false;
+  }
 });
 let quickDirty = false,
   quickDay = localDay;

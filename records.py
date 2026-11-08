@@ -146,6 +146,19 @@ def delete_day(day):
     return {"records": list_records(), "deleted_records": removed}
 
 
+def delete_all_records(confirm=False):
+    """Remove every daily record. Menu items, prices and costs are kept."""
+    if confirm is not True:
+        raise ValueError("Confirm that all records should be deleted.")
+    db = connect()
+    try:
+        with db:
+            removed = db.execute("DELETE FROM daily_records").rowcount
+    finally:
+        db.close()
+    return {"records": [], "deleted_records": removed}
+
+
 def list_records():
     db = connect()
     try:
@@ -232,6 +245,65 @@ def save_batch(day, rows):
     finally:
         db.close()
     return {"records": list_records(), "saved": len(clean)}
+
+
+IMPORT_LIMIT = 20_000
+
+
+def import_records(rows):
+    """Add many days of records at once, e.g. from an exported CSV file.
+
+    Each row needs day, item, prepared and sold; notes are optional. A row for
+    a day and item that is already saved replaces it. Nothing is saved unless
+    every row is valid. Items not yet on the menu are added without a price.
+    """
+    if not isinstance(rows, list) or not 1 <= len(rows) <= IMPORT_LIMIT:
+        raise ValueError(f"Import between 1 and {IMPORT_LIMIT:,} records at a time.")
+    clean = {}
+    for number, row in enumerate(rows, 1):
+        try:
+            if not isinstance(row, dict) or not (
+                {"day", "item", "prepared", "sold"} <= set(row)
+                <= {"day", "item", "prepared", "sold", "notes"}
+            ):
+                raise ValueError("Each record needs day, item, prepared and sold.")
+            notes = row.get("notes", "")
+            name = validate_record(
+                row["day"], row["item"], row["prepared"], row["sold"], notes
+            )
+        except ValueError as exc:
+            raise ValueError(f"Record {number}: {exc}") from exc
+        key = (row["day"], name)
+        if key in clean:
+            raise ValueError(
+                f"Record {number}: {name} appears more than once on {row['day']}."
+            )
+        clean[key] = (row["day"], name, row["prepared"], row["sold"], notes)
+    db = connect()
+    try:
+        with db:
+            existing = {
+                (r["day"], r["item"])
+                for r in db.execute("SELECT day,item FROM daily_records")
+            }
+            db.executemany(
+                """INSERT INTO daily_records(day,item,prepared,sold,notes) VALUES(?,?,?,?,?)
+                ON CONFLICT(day,item) DO UPDATE SET prepared=excluded.prepared,
+                sold=excluded.sold,notes=excluded.notes""",
+                clean.values(),
+            )
+            new_items = db.execute(
+                "INSERT OR IGNORE INTO regular_items(item) SELECT DISTINCT item FROM daily_records"
+            ).rowcount
+    finally:
+        db.close()
+    replaced = len(clean.keys() & existing)
+    return {
+        "records": list_records(),
+        "added": len(clean) - replaced,
+        "replaced": replaced,
+        "new_items": new_items,
+    }
 
 
 def item_history(item):

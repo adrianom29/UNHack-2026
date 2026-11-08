@@ -342,7 +342,9 @@ class Handler(BaseHTTPRequestHandler):
             "/calculate",
             "/records",
             "/records/batch",
+            "/records/import",
             "/records/delete-day",
+            "/records/delete-all",
             "/items",
             "/items/delete",
         ):
@@ -350,7 +352,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length", 0))
-            if not 0 < length < 131072:
+            # Imported CSV files can hold years of records.
+            limit = 4_194_304 if self.path == "/records/import" else 131072
+            if not 0 < length < limit:
                 raise ValueError("Request is too large or empty")
             args = json.loads(self.rfile.read(length))
             if self.path == "/calculate":
@@ -361,8 +365,12 @@ class Handler(BaseHTTPRequestHandler):
                 result = records.delete_item(**args)
             elif self.path == "/records/delete-day":
                 result = records.delete_day(**args)
+            elif self.path == "/records/delete-all":
+                result = records.delete_all_records(**args)
             elif self.path == "/records/batch":
                 result = records.save_batch(**args)
+            elif self.path == "/records/import":
+                result = records.import_records(**args)
             else:
                 result = records.save_record(**args)
             status = 200

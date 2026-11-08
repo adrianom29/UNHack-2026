@@ -119,6 +119,57 @@ class RecordTests(unittest.TestCase):
                 "2026-01-01", [dict(item="Soup", prepared=10, sold=5)] * 2
             )
 
+    def test_import_adds_replaces_and_is_atomic(self):
+        records.save_item("Soup", price=6, cost=2)
+        records.save_record("2026-01-01", "Soup", 100, 80, "old note")
+        result = records.import_records(
+            [
+                dict(day="2026-01-01", item="Soup", prepared=90, sold=85, notes="new"),
+                dict(day="2026-01-02", item="Soup", prepared=90, sold=90),
+                dict(day="2026-01-02", item="Bread", prepared=20, sold=10, notes=""),
+            ]
+        )
+        self.assertEqual(
+            (result["added"], result["replaced"], result["new_items"]), (2, 1, 1)
+        )
+        soup = next(r for r in records.list_records() if r["day"] == "2026-01-01")
+        self.assertEqual((soup["sold"], soup["notes"]), (85, "new"))
+        self.assertEqual(
+            records.get_item("Bread"),
+            {"item": "Bread", "active": 1, "price": None, "cost": None},
+        )
+        for bad in [
+            [dict(day="2026-01-03", item="Soup", prepared=1, sold=1),
+             dict(day="2026-01-04", item="Soup", prepared=1, sold=2)],
+            [dict(day="2026-01-03", item="Soup", prepared=1, sold=1)] * 2,
+            [dict(day="01/03/2026", item="Soup", prepared=1, sold=1)],
+            [dict(day="2026-01-03", item="Soup", prepared=1, sold=1, waste=0)],
+            [],
+        ]:
+            with self.assertRaises(ValueError):
+                records.import_records(bad)
+        self.assertEqual(len(records.list_records()), 3)
+        with self.assertRaisesRegex(ValueError, "Record 2"):
+            records.import_records([
+                dict(day="2026-01-03", item="Soup", prepared=1, sold=1),
+                dict(day="2026-01-04", item="", prepared=1, sold=1),
+            ])
+
+    def test_delete_all_records_keeps_menu(self):
+        records.save_item("Soup", price=6, cost=2)
+        records.save_record("2026-01-01", "Soup", 10, 5)
+        records.save_record("2026-01-02", "Bread", 10, 5)
+        for bad in [False, "yes", 1]:
+            with self.assertRaises(ValueError):
+                records.delete_all_records(bad)
+        self.assertEqual(len(records.list_records()), 2)
+        self.assertEqual(records.delete_all_records(True)["deleted_records"], 2)
+        self.assertEqual(records.list_records(), [])
+        self.assertEqual(
+            [i["item"] for i in records.list_items()], ["Bread", "Soup"]
+        )
+        self.assertEqual(records.get_item("Soup")["price"], 6)
+
     def test_menu_price_and_cost_edits(self):
         records.save_item("Soup", price=12, cost=5)
         for price, cost in [(-1, 5), (12, float("nan")), ("12", 5), (12, True)]:
@@ -327,6 +378,11 @@ class RecordTests(unittest.TestCase):
             self.assertEqual(failure.exception.code, 400)
             with urlopen(base + "/records") as response:
                 self.assertEqual(len(json.load(response)["records"]), 2)
+            imported = post(
+                "/records/import",
+                dict(rows=[dict(day="2026-01-05", item="Soup", prepared=9, sold=7)]),
+            )
+            self.assertEqual((imported["added"], len(imported["records"])), (1, 3))
         finally:
             server.shutdown()
             server.server_close()
